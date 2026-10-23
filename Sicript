@@ -1,562 +1,168 @@
--- ✅ StarterPlayer > StarterPlayerScripts > LocalScript
-print("[ESP] Bắt đầu khởi tạo...")
+-- ============================================
+-- SKIP E - NÚT NHỎ + KÉO TỰ DO
+-- ============================================
 
-local Players          = game:GetService("Players")
-local RunService       = game:GetService("RunService")
+local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
-local GuiService       = game:GetService("GuiService")
-local LocalPlayer      = Players.LocalPlayer
 
-local PlayerGui = LocalPlayer:WaitForChild("PlayerGui", 10)
-if not PlayerGui then warn("[ESP] Không tìm thấy PlayerGui") return end
-print("[ESP] PlayerGui OK")
+local player = Players.LocalPlayer
+local playerGui = player:WaitForChild("PlayerGui")
 
--- ===== SETTINGS =====
-local Settings = {
-    ESPEnabled          = true,
-    ShowName            = true,
-    ShowHealth          = true,
-    FillColor           = Color3.fromRGB(255, 0, 0),
-    FillTransparency    = 0.7,
-    OutlineColor        = Color3.fromRGB(255, 255, 255),
-    OutlineTransparency = 0.5,
-    TextColor           = Color3.fromRGB(255, 255, 255),
-    TextSize            = 10,
-    TextOffsetY         = 2,
-}
+-- ===== Trạng thái =====
+local isEnabled = false
+local originalDurations = setmetatable({}, { __mode = "k" })
+local trackedPrompts = setmetatable({}, { __mode = "k" })
 
--- ===== AIMBOT SETTINGS =====
-local Aimbot = {
-    Enabled       = false,
-    Keybind       = Enum.KeyCode.E,
-    HoldingKey    = false,
-    FOV           = 150,
-    Smoothness    = 0.15,
-    TargetPart    = "Head",
-    ShowFOV       = true,
-    TeamCheck     = false,
-    WallCheck     = false,
-    CurrentTarget = nil,
-}
+-- ===== Xử lý ProximityPrompt =====
+local function applySkip(prompt)
+    if not prompt:IsA("ProximityPrompt") or trackedPrompts[prompt] then return end
+    trackedPrompts[prompt] = true
+    originalDurations[prompt] = prompt.HoldDuration
+    if isEnabled then prompt.HoldDuration = 0 end
+end
 
-local espData = {}
-
--- ===== ESP =====
-local function applySettings(character)
-    local data = espData[character]
-    if not data then return end
-    if data.highlight then
-        data.highlight.Enabled             = Settings.ESPEnabled
-        data.highlight.FillColor           = Settings.FillColor
-        data.highlight.FillTransparency    = Settings.FillTransparency
-        data.highlight.OutlineColor        = Settings.OutlineColor
-        data.highlight.OutlineTransparency = Settings.OutlineTransparency
-    end
-    if data.billboard then
-        data.billboard.Enabled     = Settings.ESPEnabled and (Settings.ShowName or Settings.ShowHealth)
-        data.billboard.StudsOffset = Vector3.new(0, Settings.TextOffsetY, 0)
-    end
-    if data.nameLabel then
-        data.nameLabel.Visible    = Settings.ShowName
-        data.nameLabel.TextColor3 = Settings.TextColor
-        data.nameLabel.TextSize   = Settings.TextSize
-        data.nameLabel.Size       = UDim2.new(1, 0, 0, Settings.TextSize + 2)
-    end
-    if data.healthBar then
-        data.healthBar.Visible = Settings.ShowHealth
+local function scanPrompts()
+    for _, obj in ipairs(game:GetDescendants()) do
+        if obj:IsA("ProximityPrompt") then applySkip(obj) end
     end
 end
 
-local function applyToAll()
-    for c in pairs(espData) do applySettings(c) end
+game.DescendantAdded:Connect(function(obj)
+    if obj:IsA("ProximityPrompt") then applySkip(obj) end
+end)
+
+local function setEnabled(state)
+    isEnabled = state
+    for prompt, orig in pairs(originalDurations) do
+        if prompt.Parent then
+            prompt.HoldDuration = state and 0 or orig
+        end
+    end
+    if state then scanPrompts() end
 end
 
-local function createESP(character)
-    if espData[character] then return end
-    local rootPart = character:WaitForChild("HumanoidRootPart", 5)
-    local head     = character:WaitForChild("Head", 5)
-    local humanoid = character:WaitForChild("Humanoid", 5)
-    if not rootPart or not head or not humanoid then return end
+-- ===== GUI =====
+local gui = Instance.new("ScreenGui")
+gui.Name = "SkipEGui"
+gui.ResetOnSpawn = false
+gui.IgnoreGuiInset = true
+gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+gui.DisplayOrder = 999
+gui.Parent = playerGui
 
-    local player = Players:GetPlayerFromCharacter(character)
-    local name   = player and player.Name or character.Name
+local SIZE = 40 -- kích thước nút nhỏ
 
-    local highlight = Instance.new("Highlight")
-    highlight.Name    = "ESP_Highlight"
-    highlight.Adornee = character
-    highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
-    highlight.Parent = character
+local btn = Instance.new("TextButton")
+btn.Size = UDim2.fromOffset(SIZE, SIZE)
+btn.Position = UDim2.fromOffset(20, 20)
+btn.BackgroundColor3 = Color3.fromRGB(210, 55, 55)
+btn.TextColor3 = Color3.new(1, 1, 1)
+btn.Font = Enum.Font.GothamBold
+btn.TextSize = 18
+btn.Text = "E"          -- icon gọn
+btn.BorderSizePixel = 0
+btn.AutoButtonColor = false
+btn.Parent = gui
 
-    local billboard = Instance.new("BillboardGui")
-    billboard.Name        = "ESP_NameTag"
-    billboard.Adornee     = head
-    billboard.Size        = UDim2.new(0, 120, 0, 28)
-    billboard.AlwaysOnTop = true
-    billboard.LightInfluence = 0
-    billboard.MaxDistance = 500
-    billboard.Parent      = character
+Instance.new("UICorner", btn).CornerRadius = UDim.new(1, 0) -- tròn hoàn toàn
 
-    local frame = Instance.new("Frame")
-    frame.BackgroundTransparency = 1
-    frame.Size = UDim2.new(1, 0, 1, 0)
-    frame.Parent = billboard
+local stroke = Instance.new("UIStroke", btn)
+stroke.Color = Color3.new(1, 1, 1)
+stroke.Thickness = 1.5
+stroke.Transparency = 0.3
 
-    local layout = Instance.new("UIListLayout")
-    layout.HorizontalAlignment = Enum.HorizontalAlignment.Center
-    layout.VerticalAlignment   = Enum.VerticalAlignment.Center
-    layout.Parent = frame
+-- Chấm nhỏ báo trạng thái ON
+local dot = Instance.new("Frame", btn)
+dot.Size = UDim2.fromOffset(8, 8)
+dot.Position = UDim2.new(1, -10, 0, 2)
+dot.BackgroundColor3 = Color3.fromRGB(60, 255, 120)
+dot.BorderSizePixel = 0
+dot.Visible = false
+Instance.new("UICorner", dot).CornerRadius = UDim.new(1, 0)
 
-    local nameLabel = Instance.new("TextLabel")
-    nameLabel.BackgroundTransparency = 1
-    nameLabel.Size = UDim2.new(1, 0, 0, Settings.TextSize + 2)
-    nameLabel.Font = Enum.Font.GothamBold
-    nameLabel.Text = name
-    nameLabel.TextStrokeTransparency = 0.5
-    nameLabel.TextStrokeColor3 = Color3.new(0, 0, 0)
-    nameLabel.LayoutOrder = 1
-    nameLabel.Parent = frame
+-- ===== Hiển thị =====
+local COLOR_ON  = Color3.fromRGB(45, 190, 85)
+local COLOR_OFF = Color3.fromRGB(210, 55, 55)
 
-    local healthBar = Instance.new("Frame")
-    healthBar.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
-    healthBar.BackgroundTransparency = 0.3
-    healthBar.BorderSizePixel = 0
-    healthBar.Size = UDim2.new(0.5, 0, 0, 2)
-    healthBar.LayoutOrder = 2
-    healthBar.Parent = frame
+local function refreshVisual()
+    btn.BackgroundColor3 = isEnabled and COLOR_ON or COLOR_OFF
+    dot.Visible = isEnabled
+end
 
-    local hbC = Instance.new("UICorner") hbC.CornerRadius = UDim.new(0, 1) hbC.Parent = healthBar
+-- ===== KÉO THẢ TỰ DO =====
+local DRAG_THRESHOLD = 5
+local pressing = false
+local dragging = false
+local pressPos = Vector2.zero
+local dragOffset = Vector2.zero
+local moveConn
 
-    local healthFill = Instance.new("Frame")
-    healthFill.BackgroundColor3 = Color3.fromRGB(0, 255, 0)
-    healthFill.BorderSizePixel = 0
-    healthFill.Size = UDim2.new(1, 0, 1, 0)
-    healthFill.Parent = healthBar
+local function clampToScreen(x, y)
+    local vp = workspace.CurrentCamera.ViewportSize
+    local s = btn.AbsoluteSize
+    return math.clamp(x, 0, vp.X - s.X), math.clamp(y, 0, vp.Y - s.Y)
+end
 
-    local hfC = Instance.new("UICorner") hfC.CornerRadius = UDim.new(0, 1) hfC.Parent = healthFill
+btn.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1
+    or input.UserInputType == Enum.UserInputType.Touch then
+        pressing = true
+        dragging = false
+        pressPos = Vector2.new(input.Position.X, input.Position.Y)
 
-    local conn = RunService.RenderStepped:Connect(function()
-        if humanoid and humanoid.Parent then
-            local pct = math.clamp(humanoid.Health / math.max(humanoid.MaxHealth, 1), 0, 1)
-            healthFill.Size = UDim2.new(pct, 0, 1, 0)
-            if pct > 0.5 then
-                healthFill.BackgroundColor3 = Color3.fromRGB(0, 255, 0)
-            elseif pct > 0.25 then
-                healthFill.BackgroundColor3 = Color3.fromRGB(255, 200, 0)
-            else
-                healthFill.BackgroundColor3 = Color3.fromRGB(255, 0, 0)
+        local absPos = btn.AbsolutePosition
+        dragOffset = Vector2.new(pressPos.X - absPos.X, pressPos.Y - absPos.Y)
+
+        if moveConn then moveConn:Disconnect() end
+        moveConn = UserInputService.InputChanged:Connect(function(i)
+            if not pressing then return end
+            if i.UserInputType ~= Enum.UserInputType.MouseMovement
+            and i.UserInputType ~= Enum.UserInputType.Touch then return end
+
+            local cur = Vector2.new(i.Position.X, i.Position.Y)
+
+            -- Bắt đầu kéo khi vượt ngưỡng
+            if not dragging and (cur - pressPos).Magnitude >= DRAG_THRESHOLD then
+                dragging = true
             end
-        end
-    end)
 
-    espData[character] = {
-        highlight = highlight, billboard = billboard,
-        nameLabel = nameLabel, healthBar = healthBar,
-        healthFill = healthFill, healthConnection = conn,
-    }
-    applySettings(character)
-end
-
-local function removeESP(character)
-    local d = espData[character]
-    if not d then return end
-    if d.healthConnection then d.healthConnection:Disconnect() end
-    if d.highlight then d.highlight:Destroy() end
-    if d.billboard then d.billboard:Destroy() end
-    espData[character] = nil
-end
-
-local function setupPlayer(p)
-    if p == LocalPlayer then return end
-    if p.Character then createESP(p.Character) end
-    p.CharacterAdded:Connect(function(c) task.wait(0.1) createESP(c) end)
-    p.CharacterRemoving:Connect(removeESP)
-end
-for _, p in ipairs(Players:GetPlayers()) do setupPlayer(p) end
-Players.PlayerAdded:Connect(setupPlayer)
-Players.PlayerRemoving:Connect(function(p) if p.Character then removeESP(p.Character) end end)
-
-print("[ESP] ESP đã kích hoạt")
-
--- ===== MENU GUI (AnhtuMup) =====
-local PRESET_COLORS = {
-    {Color3.fromRGB(255,0,0),"Đỏ"},{Color3.fromRGB(0,255,0),"Xanh lá"},
-    {Color3.fromRGB(0,120,255),"Xanh dương"},{Color3.fromRGB(255,255,0),"Vàng"},
-    {Color3.fromRGB(0,255,255),"Cyan"},{Color3.fromRGB(255,0,255),"Hồng"},
-    {Color3.fromRGB(255,255,255),"Trắng"},{Color3.fromRGB(0,0,0),"Đen"},
-}
-
-local function makeSectionLabel(parent, text)
-    local l = Instance.new("TextLabel")
-    l.Size = UDim2.new(1, 0, 0, 18)
-    l.BackgroundTransparency = 1
-    l.Text = "── "..text.." ──"
-    l.TextColor3 = Color3.fromRGB(150, 130, 255)
-    l.TextSize = 10
-    l.Font = Enum.Font.GothamBold
-    l.TextXAlignment = Enum.TextXAlignment.Left
-    l.Parent = parent
-end
-
-local function makeToggle(parent, label, default, cb)
-    local c = Instance.new("Frame")
-    c.Size = UDim2.new(1, 0, 0, 24)
-    c.BackgroundTransparency = 1
-    c.Parent = parent
-    local l = Instance.new("TextLabel")
-    l.Size = UDim2.new(1, -55, 1, 0)
-    l.Position = UDim2.new(0, 4, 0, 0)
-    l.BackgroundTransparency = 1
-    l.Text = label
-    l.TextColor3 = Color3.fromRGB(220, 220, 220)
-    l.TextSize = 11
-    l.Font = Enum.Font.Gotham
-    l.TextXAlignment = Enum.TextXAlignment.Left
-    l.Parent = c
-    local b = Instance.new("TextButton")
-    b.Size = UDim2.new(0, 40, 0, 18)
-    b.Position = UDim2.new(1, -44, 0.5, -9)
-    b.BackgroundColor3 = default and Color3.fromRGB(120, 100, 255) or Color3.fromRGB(60, 60, 70)
-    b.BorderSizePixel = 0
-    b.Text = default and "ON" or "OFF"
-    b.TextColor3 = Color3.new(1,1,1)
-    b.TextSize = 10
-    b.Font = Enum.Font.GothamBold
-    b.AutoButtonColor = false
-    b.Parent = c
-    local cr = Instance.new("UICorner") cr.CornerRadius = UDim.new(0,4) cr.Parent = b
-    local s = default
-    b.MouseButton1Click:Connect(function()
-        s = not s
-        b.BackgroundColor3 = s and Color3.fromRGB(120,100,255) or Color3.fromRGB(60,60,70)
-        b.Text = s and "ON" or "OFF"
-        cb(s)
-    end)
-end
-
-local function makeSlider(parent, label, minV, maxV, def, isInt, cb)
-    local c = Instance.new("Frame")
-    c.Size = UDim2.new(1, 0, 0, 36)
-    c.BackgroundTransparency = 1
-    c.Parent = parent
-    local l = Instance.new("TextLabel")
-    l.Size = UDim2.new(1, -55, 0, 14)
-    l.Position = UDim2.new(0, 4, 0, 0)
-    l.BackgroundTransparency = 1
-    l.Text = label
-    l.TextColor3 = Color3.fromRGB(220,220,220)
-    l.TextSize = 11
-    l.Font = Enum.Font.Gotham
-    l.TextXAlignment = Enum.TextXAlignment.Left
-    l.Parent = c
-    local v = Instance.new("TextLabel")
-    v.Size = UDim2.new(0, 50, 0, 14)
-    v.Position = UDim2.new(1, -54, 0, 0)
-    v.BackgroundTransparency = 1
-    v.Text = isInt and tostring(math.floor(def)) or string.format("%.2f", def)
-    v.TextColor3 = Color3.fromRGB(150,130,255)
-    v.TextSize = 11
-    v.Font = Enum.Font.GothamBold
-    v.TextXAlignment = Enum.TextXAlignment.Right
-    v.Parent = c
-    local bar = Instance.new("Frame")
-    bar.Size = UDim2.new(1, -8, 0, 5)
-    bar.Position = UDim2.new(0, 4, 0, 20)
-    bar.BackgroundColor3 = Color3.fromRGB(40,40,50)
-    bar.BorderSizePixel = 0
-    bar.Parent = c
-    local bc = Instance.new("UICorner") bc.CornerRadius = UDim.new(0,3) bc.Parent = bar
-    local fill = Instance.new("Frame")
-    fill.Size = UDim2.new((def-minV)/(maxV-minV), 0, 1, 0)
-    fill.BackgroundColor3 = Color3.fromRGB(120,100,255)
-    fill.BorderSizePixel = 0
-    fill.Parent = bar
-    local fc = Instance.new("UICorner") fc.CornerRadius = UDim.new(0,3) fc.Parent = fill
-    local dragging = false
-    local function upd(input)
-        local pos = math.clamp((input.Position.X - bar.AbsolutePosition.X) / bar.AbsoluteSize.X, 0, 1)
-        local val = minV + (maxV-minV)*pos
-        if isInt then val = math.floor(val+0.5) end
-        fill.Size = UDim2.new(pos,0,1,0)
-        v.Text = isInt and tostring(val) or string.format("%.2f", val)
-        cb(val)
+            if dragging then
+                local nx, ny = clampToScreen(cur.X - dragOffset.X, cur.Y - dragOffset.Y)
+                btn.Position = UDim2.fromOffset(nx, ny)
+            end
+        end)
     end
-    bar.InputBegan:Connect(function(i)
-        if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
-            dragging = true; upd(i)
-        end
-    end)
-    UserInputService.InputChanged:Connect(function(i)
-        if dragging and (i.UserInputType == Enum.UserInputType.MouseMovement or i.UserInputType == Enum.UserInputType.Touch) then
-            upd(i)
-        end
-    end)
-    UserInputService.InputEnded:Connect(function(i)
-        if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
-            dragging = false
-        end
-    end)
-end
+end)
 
-local function makeColorPicker(parent, label, cb)
-    local c = Instance.new("Frame")
-    c.Size = UDim2.new(1, 0, 0, 44)
-    c.BackgroundTransparency = 1
-    c.Parent = parent
-    local l = Instance.new("TextLabel")
-    l.Size = UDim2.new(1, -8, 0, 14)
-    l.Position = UDim2.new(0, 4, 0, 0)
-    l.BackgroundTransparency = 1
-    l.Text = label
-    l.TextColor3 = Color3.fromRGB(220,220,220)
-    l.TextSize = 11
-    l.Font = Enum.Font.Gotham
-    l.TextXAlignment = Enum.TextXAlignment.Left
-    l.Parent = c
-    local row = Instance.new("Frame")
-    row.Size = UDim2.new(1, -8, 0, 22)
-    row.Position = UDim2.new(0, 4, 0, 16)
-    row.BackgroundTransparency = 1
-    row.Parent = c
-    local lay = Instance.new("UIListLayout")
-    lay.FillDirection = Enum.FillDirection.Horizontal
-    lay.Padding = UDim.new(0,3)
-    lay.Parent = row
-    for _, p in ipairs(PRESET_COLORS) do
-        local b = Instance.new("TextButton")
-        b.Size = UDim2.new(0, 20, 0, 20)
-        b.BackgroundColor3 = p[1]
-        b.BorderSizePixel = 1
-        b.BorderColor3 = Color3.fromRGB(80,80,90)
-        b.Text = ""
-        b.AutoButtonColor = false
-        b.Parent = row
-        local cr = Instance.new("UICorner") cr.CornerRadius = UDim.new(0,4) cr.Parent = b
-        b.MouseButton1Click:Connect(function() cb(p[1]) end)
+UserInputService.InputEnded:Connect(function(input)
+    if input.UserInputType ~= Enum.UserInputType.MouseButton1
+    and input.UserInputType ~= Enum.UserInputType.Touch then return end
+    if not pressing then return end
+
+    pressing = false
+    if moveConn then moveConn:Disconnect(); moveConn = nil end
+
+    -- Không kéo = click → toggle
+    if not dragging then
+        setEnabled(not isEnabled)
+        refreshVisual()
     end
-end
+    dragging = false
+end)
 
--- Helper: keybind selector
-local function makeKeybind(parent, label, defaultKey, cb)
-    local c = Instance.new("Frame")
-    c.Size = UDim2.new(1, 0, 0, 24)
-    c.BackgroundTransparency = 1
-    c.Parent = parent
-    local l = Instance.new("TextLabel")
-    l.Size = UDim2.new(1, -85, 1, 0)
-    l.Position = UDim2.new(0, 4, 0, 0)
-    l.BackgroundTransparency = 1
-    l.Text = label
-    l.TextColor3 = Color3.fromRGB(220, 220, 220)
-    l.TextSize = 11
-    l.Font = Enum.Font.Gotham
-    l.TextXAlignment = Enum.TextXAlignment.Left
-    l.Parent = c
-    local b = Instance.new("TextButton")
-    b.Size = UDim2.new(0, 70, 0, 18)
-    b.Position = UDim2.new(1, -74, 0.5, -9)
-    b.BackgroundColor3 = Color3.fromRGB(60, 60, 70)
-    b.BorderSizePixel = 0
-    b.Text = defaultKey.Name
-    b.TextColor3 = Color3.new(1,1,1)
-    b.TextSize = 10
-    b.Font = Enum.Font.GothamBold
-    b.AutoButtonColor = false
-    b.Parent = c
-    local cr = Instance.new("UICorner") cr.CornerRadius = UDim.new(0,4) cr.Parent = b
-    local listening = false
-    b.MouseButton1Click:Connect(function()
-        if listening then return end
-        listening = true
-        b.Text = "..."
-        b.BackgroundColor3 = Color3.fromRGB(120, 100, 255)
-    end)
-    UserInputService.InputBegan:Connect(function(i, gp)
-        if not listening then return end
-        if i.UserInputType == Enum.UserInputType.Keyboard then
-            listening = false
-            b.Text = i.KeyCode.Name
-            b.BackgroundColor3 = Color3.fromRGB(60, 60, 70)
-            cb(i.KeyCode)
-        end
-    end)
-end
+-- Hover
+btn.MouseEnter:Connect(function() stroke.Transparency = 0 end)
+btn.MouseLeave:Connect(function() stroke.Transparency = 0.3 end)
 
--- Helper: cycle button (dropdown đơn giản)
-local function makeCycle(parent, label, options, default, cb)
-    local c = Instance.new("Frame")
-    c.Size = UDim2.new(1, 0, 0, 24)
-    c.BackgroundTransparency = 1
-    c.Parent = parent
-    local l = Instance.new("TextLabel")
-    l.Size = UDim2.new(1, -85, 1, 0)
-    l.Position = UDim2.new(0, 4, 0, 0)
-    l.BackgroundTransparency = 1
-    l.Text = label
-    l.TextColor3 = Color3.fromRGB(220, 220, 220)
-    l.TextSize = 11
-    l.Font = Enum.Font.Gotham
-    l.TextXAlignment = Enum.TextXAlignment.Left
-    l.Parent = c
-    local b = Instance.new("TextButton")
-    b.Size = UDim2.new(0, 70, 0, 18)
-    b.Position = UDim2.new(1, -74, 0.5, -9)
-    b.BackgroundColor3 = Color3.fromRGB(60, 60, 70)
-    b.BorderSizePixel = 0
-    b.Text = default
-    b.TextColor3 = Color3.new(1,1,1)
-    b.TextSize = 10
-    b.Font = Enum.Font.GothamBold
-    b.AutoButtonColor = false
-    b.Parent = c
-    local cr = Instance.new("UICorner") cr.CornerRadius = UDim.new(0,4) cr.Parent = b
-    local idx = 1
-    for i, v in ipairs(options) do
-        if v == default then idx = i; break end
+-- Phím tắt K
+UserInputService.InputBegan:Connect(function(input, gp)
+    if gp then return end
+    if input.KeyCode == Enum.KeyCode.K then
+        setEnabled(not isEnabled)
+        refreshVisual()
     end
-    b.MouseButton1Click:Connect(function()
-        idx = (idx % #options) + 1
-        b.Text = options[idx]
-        cb(options[idx])
-    end)
-end
+end)
 
--- ===== TẠO GUI =====
-local sg = Instance.new("ScreenGui")
-sg.Name = "AnhtuMupMenu"
-sg.ResetOnSpawn = false
-sg.IgnoreGuiInset = true
-sg.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
-sg.DisplayOrder = 999
-sg.Parent = PlayerGui
-print("[ESP] ScreenGui đã gắn vào PlayerGui")
-
-local toggleBtn = Instance.new("TextButton")
-toggleBtn.Size = UDim2.new(0, 100, 0, 28)
-toggleBtn.Position = UDim2.new(0, 10, 0, 60)
-toggleBtn.BackgroundColor3 = Color3.fromRGB(120, 100, 255)
-toggleBtn.BorderSizePixel = 0
-toggleBtn.Text = "AnhtuMup"
-toggleBtn.TextColor3 = Color3.new(1,1,1)
-toggleBtn.TextSize = 12
-toggleBtn.Font = Enum.Font.GothamBold
-toggleBtn.AutoButtonColor = false
-toggleBtn.Parent = sg
-local tbc = Instance.new("UICorner") tbc.CornerRadius = UDim.new(0,6) tbc.Parent = toggleBtn
-
-local panel = Instance.new("Frame")
-panel.Size = UDim2.new(0, 220, 0, 450)
-panel.Position = UDim2.new(0.5, -110, 0.5, -225)
-panel.BackgroundColor3 = Color3.fromRGB(20, 20, 28)
-panel.BorderSizePixel = 0
-panel.Visible = false
-panel.Active = true
-panel.Parent = sg
-local pc = Instance.new("UICorner") pc.CornerRadius = UDim.new(0,8) pc.Parent = panel
-local pstk = Instance.new("UIStroke") pstk.Color = Color3.fromRGB(80,70,150) pstk.Thickness = 1.5 pstk.Parent = panel
-
-local header = Instance.new("Frame")
-header.Size = UDim2.new(1, 0, 0, 30)
-header.BackgroundColor3 = Color3.fromRGB(40, 35, 60)
-header.BorderSizePixel = 0
-header.Active = true
-header.Parent = panel
-local hc = Instance.new("UICorner") hc.CornerRadius = UDim.new(0,8) hc.Parent = header
-local hfix = Instance.new("Frame")
-hfix.Size = UDim2.new(1, 0, 0, 14)
-hfix.Position = UDim2.new(0, 0, 1, -14)
-hfix.BackgroundColor3 = Color3.fromRGB(40, 35, 60)
-hfix.BorderSizePixel = 0
-hfix.Parent = header
-
-local title = Instance.new("TextLabel")
-title.Size = UDim2.new(1, -36, 1, 0)
-title.Position = UDim2.new(0, 10, 0, 0)
-title.BackgroundTransparency = 1
-title.Text = "AnhtuMup"
-title.TextColor3 = Color3.fromRGB(220,210,255)
-title.TextSize = 12
-title.Font = Enum.Font.GothamBold
-title.TextXAlignment = Enum.TextXAlignment.Left
-title.Parent = header
-
-local closeBtn = Instance.new("TextButton")
-closeBtn.Size = UDim2.new(0, 22, 0, 22)
-closeBtn.Position = UDim2.new(1, -28, 0.5, -11)
-closeBtn.BackgroundColor3 = Color3.fromRGB(200, 60, 60)
-closeBtn.BorderSizePixel = 0
-closeBtn.Text = "X"
-closeBtn.TextColor3 = Color3.new(1,1,1)
-closeBtn.TextSize = 11
-closeBtn.Font = Enum.Font.GothamBold
-closeBtn.AutoButtonColor = false
-closeBtn.Parent = header
-local cc = Instance.new("UICorner") cc.CornerRadius = UDim.new(0,4) cc.Parent = closeBtn
-
-local scroll = Instance.new("ScrollingFrame")
-scroll.Size = UDim2.new(1, -8, 1, -38)
-scroll.Position = UDim2.new(0, 4, 0, 34)
-scroll.BackgroundTransparency = 1
-scroll.BorderSizePixel = 0
-scroll.ScrollBarThickness = 3
-scroll.ScrollBarImageColor3 = Color3.fromRGB(120,100,255)
-scroll.CanvasSize = UDim2.new(0,0,0,0)
-scroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
-scroll.Parent = panel
-
-local cl = Instance.new("UIListLayout")
-cl.Padding = UDim.new(0,5)
-cl.SortOrder = Enum.SortOrder.LayoutOrder
-cl.Parent = scroll
-local cp = Instance.new("UIPadding")
-cp.PaddingLeft = UDim.new(0,3) cp.PaddingRight = UDim.new(0,3)
-cp.PaddingTop = UDim.new(0,3) cp.PaddingBottom = UDim.new(0,6)
-cp.Parent = scroll
-
--- ===== FOV CIRCLE (Aimbot) =====
-local fovCircle = Instance.new("Frame")
-fovCircle.Name = "AimbotFOVCircle"
-fovCircle.Size = UDim2.fromOffset(Aimbot.FOV * 2, Aimbot.FOV * 2)
-fovCircle.Position = UDim2.new(0.5, 0, 0.5, 0)
-fovCircle.AnchorPoint = Vector2.new(0.5, 0.5)
-fovCircle.BackgroundTransparency = 1
-fovCircle.BorderSizePixel = 0
-fovCircle.Visible = false
-fovCircle.ZIndex = 0
-fovCircle.Parent = sg
-
-local fovCorner = Instance.new("UICorner")
-fovCorner.CornerRadius = UDim.new(1, 0)
-fovCorner.Parent = fovCircle
-
-local fovStroke = Instance.new("UIStroke")
-fovStroke.Color = Color3.fromRGB(255, 100, 100)
-fovStroke.Thickness = 1.5
-fovStroke.Transparency = 0.4
-fovStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
-fovStroke.Parent = fovCircle
-
-local function updateFOVVisual()
-    fovCircle.Size = UDim2.fromOffset(Aimbot.FOV * 2, Aimbot.FOV * 2)
-    fovCircle.Visible = Aimbot.Enabled and Aimbot.ShowFOV
-end
-
--- ===== AIMBOT LOGIC =====
-local function getTargetPart(character)
-    if not character then return nil end
-    local part = character:FindFirstChild(Aimbot.TargetPart)
-    if not part then
-        part = character:FindFirstChild("HumanoidRootPart") or character:FindFirstChild("Head")
-    end
-    return part
-end
-
-local function findTarget()
-    local cam = workspace.CurrentCamera
-    if not cam then return nil end
-    local vpCenter = cam.ViewportSize / 2
-    local bestTarget, bestDist = nil, Aimbot.FOV
-
-    for _, p in ipairs(Players:GetPlayers()) do
-        if p == LocalPlayer then continue end
-        local char = p.Character
-        i
+-- Khởi tạo
+scanPrompts()
+refreshVisual()
