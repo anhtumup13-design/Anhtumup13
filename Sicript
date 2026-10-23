@@ -1,168 +1,357 @@
--- ============================================
--- SKIP E - NÚT NHỎ + KÉO TỰ DO
--- ============================================
+-- ✅ ANHTUMUP - MENU 3 CỘT HOÀN CHỈNH (NÚT "T" + FIX ALL BUGS)
+local Players, RunService, UIS = game:GetService("Players"), game:GetService("RunService"), game:GetService("UserInputService")
+local LP, PG = Players.LocalPlayer, Players.LocalPlayer:WaitForChild("PlayerGui")
 
-local Players = game:GetService("Players")
-local UserInputService = game:GetService("UserInputService")
+-- Cấu hình mặc định (Dùng để Reset)
+local DEFAULTS = {
+    Enabled=false, ModeCharacter=false, FOV=300, ShowFOV=true, Smooth=0.15, Target="Head", TeamCheck=false,
+    ESP=false, ShowName=true, ShowHealth=true, ESPDistance=1000,
+    SpeedEnabled=false, Speed=16, JumpEnabled=false, Jump=50, CameraFOV=70
+}
+local S = table.clone(DEFAULTS)
+local isDestroyed = false
 
-local player = Players.LocalPlayer
-local playerGui = player:WaitForChild("PlayerGui")
+local ESP_CONFIG = {
+    FillColor = Color3.fromRGB(255, 0, 0), FillTransparency = 0.7,
+    OutlineColor = Color3.fromRGB(255, 255, 255), OutlineTransparency = 0.5,
+    TextColor = Color3.fromRGB(255, 255, 255), TextSize = 10, TextOffsetY = 2
+}
 
--- ===== Trạng thái =====
-local isEnabled = false
-local originalDurations = setmetatable({}, { __mode = "k" })
-local trackedPrompts = setmetatable({}, { __mode = "k" })
-
--- ===== Xử lý ProximityPrompt =====
-local function applySkip(prompt)
-    if not prompt:IsA("ProximityPrompt") or trackedPrompts[prompt] then return end
-    trackedPrompts[prompt] = true
-    originalDurations[prompt] = prompt.HoldDuration
-    if isEnabled then prompt.HoldDuration = 0 end
+local function new(c, p, parent)
+    local o = Instance.new(c)
+    for k, v in pairs(p) do o[k] = v end
+    if parent then o.Parent = parent end
+    return o
 end
 
-local function scanPrompts()
-    for _, obj in ipairs(game:GetDescendants()) do
-        if obj:IsA("ProximityPrompt") then applySkip(obj) end
-    end
-end
-
-game.DescendantAdded:Connect(function(obj)
-    if obj:IsA("ProximityPrompt") then applySkip(obj) end
-end)
-
-local function setEnabled(state)
-    isEnabled = state
-    for prompt, orig in pairs(originalDurations) do
-        if prompt.Parent then
-            prompt.HoldDuration = state and 0 or orig
+-- ===== LOGIC AIM ASSIST =====
+local function getTarget()
+    local cam, center = workspace.CurrentCamera, workspace.CurrentCamera.ViewportSize / 2
+    local best, dist = nil, S.FOV
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p ~= LP and p.Character then
+            local hum = p.Character:FindFirstChildOfClass("Humanoid")
+            local part = p.Character:FindFirstChild(S.Target) or p.Character:FindFirstChild("HumanoidRootPart")
+            if hum and hum.Health > 0 and part and not (S.TeamCheck and p.Team == LP.Team) then
+                local pos, onScreen = cam:WorldToViewportPoint(part.Position)
+                if onScreen then
+                    local d = (Vector2.new(pos.X, pos.Y) - center).Magnitude
+                    if d < dist then dist = d; best = part end
+                end
+            end
         end
     end
-    if state then scanPrompts() end
+    return best
 end
 
--- ===== GUI =====
-local gui = Instance.new("ScreenGui")
-gui.Name = "SkipEGui"
-gui.ResetOnSpawn = false
-gui.IgnoreGuiInset = true
-gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
-gui.DisplayOrder = 999
-gui.Parent = playerGui
+-- ===== LOGIC ESP =====
+local espData = {}
 
-local SIZE = 40 -- kích thước nút nhỏ
-
-local btn = Instance.new("TextButton")
-btn.Size = UDim2.fromOffset(SIZE, SIZE)
-btn.Position = UDim2.fromOffset(20, 20)
-btn.BackgroundColor3 = Color3.fromRGB(210, 55, 55)
-btn.TextColor3 = Color3.new(1, 1, 1)
-btn.Font = Enum.Font.GothamBold
-btn.TextSize = 18
-btn.Text = "E"          -- icon gọn
-btn.BorderSizePixel = 0
-btn.AutoButtonColor = false
-btn.Parent = gui
-
-Instance.new("UICorner", btn).CornerRadius = UDim.new(1, 0) -- tròn hoàn toàn
-
-local stroke = Instance.new("UIStroke", btn)
-stroke.Color = Color3.new(1, 1, 1)
-stroke.Thickness = 1.5
-stroke.Transparency = 0.3
-
--- Chấm nhỏ báo trạng thái ON
-local dot = Instance.new("Frame", btn)
-dot.Size = UDim2.fromOffset(8, 8)
-dot.Position = UDim2.new(1, -10, 0, 2)
-dot.BackgroundColor3 = Color3.fromRGB(60, 255, 120)
-dot.BorderSizePixel = 0
-dot.Visible = false
-Instance.new("UICorner", dot).CornerRadius = UDim.new(1, 0)
-
--- ===== Hiển thị =====
-local COLOR_ON  = Color3.fromRGB(45, 190, 85)
-local COLOR_OFF = Color3.fromRGB(210, 55, 55)
-
-local function refreshVisual()
-    btn.BackgroundColor3 = isEnabled and COLOR_ON or COLOR_OFF
-    dot.Visible = isEnabled
+local function updateESP(character)
+    local data = espData[character]
+    if not data then return end
+    if data.highlight then data.highlight.Enabled = S.ESP end
+    if data.billboard then 
+        data.billboard.Enabled = S.ESP and (S.ShowName or S.ShowHealth)
+        data.billboard.MaxDistance = S.ESPDistance
+    end
+    if data.nameLabel then data.nameLabel.Visible = S.ShowName end
+    if data.healthBar then data.healthBar.Visible = S.ShowHealth end
 end
 
--- ===== KÉO THẢ TỰ DO =====
-local DRAG_THRESHOLD = 5
-local pressing = false
-local dragging = false
-local pressPos = Vector2.zero
-local dragOffset = Vector2.zero
-local moveConn
-
-local function clampToScreen(x, y)
-    local vp = workspace.CurrentCamera.ViewportSize
-    local s = btn.AbsoluteSize
-    return math.clamp(x, 0, vp.X - s.X), math.clamp(y, 0, vp.Y - s.Y)
+local function updateAllESP()
+    for char in pairs(espData) do updateESP(char) end
 end
 
-btn.InputBegan:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseButton1
-    or input.UserInputType == Enum.UserInputType.Touch then
-        pressing = true
-        dragging = false
-        pressPos = Vector2.new(input.Position.X, input.Position.Y)
+local function createESP(character)
+    if espData[character] then return end
+    local head = character:WaitForChild("Head", 5)
+    local humanoid = character:WaitForChild("Humanoid", 5)
+    if not head or not humanoid then return end
 
-        local absPos = btn.AbsolutePosition
-        dragOffset = Vector2.new(pressPos.X - absPos.X, pressPos.Y - absPos.Y)
+    local player = Players:GetPlayerFromCharacter(character)
+    local playerName = player and player.Name or character.Name
 
-        if moveConn then moveConn:Disconnect() end
-        moveConn = UserInputService.InputChanged:Connect(function(i)
-            if not pressing then return end
-            if i.UserInputType ~= Enum.UserInputType.MouseMovement
-            and i.UserInputType ~= Enum.UserInputType.Touch then return end
+    local highlight = new("Highlight", {Adornee=character, FillColor=ESP_CONFIG.FillColor, FillTransparency=ESP_CONFIG.FillTransparency, OutlineColor=ESP_CONFIG.OutlineColor, OutlineTransparency=ESP_CONFIG.OutlineTransparency, DepthMode=Enum.HighlightDepthMode.AlwaysOnTop, Parent=character})
+    local billboard = new("BillboardGui", {Adornee=head, Size=UDim2.new(0, 120, 0, 28), StudsOffset=Vector3.new(0, ESP_CONFIG.TextOffsetY, 0), AlwaysOnTop=true, LightInfluence=0, MaxDistance=S.ESPDistance, Parent=character})
+    local frame = new("Frame", {BackgroundTransparency=1, Size=UDim2.new(1, 0, 1, 0), Parent=billboard})
+    new("UIListLayout", {HorizontalAlignment=Enum.HorizontalAlignment.Center, VerticalAlignment=Enum.VerticalAlignment.Center, SortOrder=Enum.SortOrder.LayoutOrder, Parent=frame})
 
-            local cur = Vector2.new(i.Position.X, i.Position.Y)
+    local nameLabel = new("TextLabel", {BackgroundTransparency=1, Size=UDim2.new(1, 0, 0, ESP_CONFIG.TextSize + 2), Font=Enum.Font.GothamBold, Text=playerName, TextColor3=ESP_CONFIG.TextColor, TextSize=ESP_CONFIG.TextSize, TextStrokeTransparency=0.5, TextStrokeColor3=Color3.new(0,0,0), LayoutOrder=1, Parent=frame})
+    local healthBar = new("Frame", {BackgroundColor3=Color3.fromRGB(30, 30, 30), BackgroundTransparency=0.3, BorderSizePixel=0, Size=UDim2.new(0.5, 0, 0, 2), LayoutOrder=2, Parent=frame})
+    new("UICorner", {CornerRadius=UDim.new(0, 1)}, healthBar)
+    local healthFill = new("Frame", {BackgroundColor3=Color3.fromRGB(0, 255, 0), BorderSizePixel=0, Size=UDim2.new(1, 0, 1, 0), Parent=healthBar})
+    new("UICorner", {CornerRadius=UDim.new(0, 1)}, healthFill)
 
-            -- Bắt đầu kéo khi vượt ngưỡng
-            if not dragging and (cur - pressPos).Magnitude >= DRAG_THRESHOLD then
-                dragging = true
+    local healthConn = RunService.RenderStepped:Connect(function()
+        if humanoid and humanoid.Parent then
+            local pct = math.clamp(humanoid.Health / math.max(humanoid.MaxHealth,1), 0, 1)
+            healthFill.Size = UDim2.new(pct, 0, 1, 0)
+            healthFill.BackgroundColor3 = pct > 0.5 and Color3.fromRGB(0, 255, 0) or (pct > 0.25 and Color3.fromRGB(255, 200, 0) or Color3.fromRGB(255, 0, 0))
+        end
+    end)
+
+    espData[character] = {highlight=highlight, billboard=billboard, nameLabel=nameLabel, healthBar=healthBar, healthConnection=healthConn}
+    updateESP(character)
+end
+
+local function removeESP(character)
+    local data = espData[character]
+    if not data then return end
+    if data.healthConnection then data.healthConnection:Disconnect() end
+    if data.highlight then data.highlight:Destroy() end
+    if data.billboard then data.billboard:Destroy() end
+    espData[character] = nil
+end
+
+local function setupPlayer(p)
+    if p == LP then return end
+    if p.Character then createESP(p.Character) end
+    p.CharacterAdded:Connect(function(char) task.wait(0.1) createESP(char) end)
+    p.CharacterRemoving:Connect(removeESP)
+end
+
+for _, p in ipairs(Players:GetPlayers()) do setupPlayer(p) end
+Players.PlayerAdded:Connect(setupPlayer)
+Players.PlayerRemoving:Connect(function(p) if p.Character then removeESP(p.Character) end end)
+
+-- ===== LOGIC SPEED & JUMP =====
+RunService.Stepped:Connect(function()
+    if isDestroyed then return end
+    local char = LP.Character
+    if char then
+        local hum = char:FindFirstChildOfClass("Humanoid")
+        if hum then
+            local targetSpeed = S.SpeedEnabled and S.Speed or 16
+            if hum.WalkSpeed ~= targetSpeed then hum.WalkSpeed = targetSpeed end
+            
+            local targetJump = S.JumpEnabled and S.Jump or 50
+            if hum.UseJumpPower then
+                if hum.JumpPower ~= targetJump then hum.JumpPower = targetJump end
+            else
+                if hum.JumpHeight ~= targetJump then hum.JumpHeight = targetJump end
             end
+        end
+    end
+end)
 
-            if dragging then
-                local nx, ny = clampToScreen(cur.X - dragOffset.X, cur.Y - dragOffset.Y)
-                btn.Position = UDim2.fromOffset(nx, ny)
+-- ===== GIAO DIỆN MENU NGANG PHÂN CỘT =====
+local sg = new("ScreenGui", {Name="AnhTuMup", ResetOnSpawn=false, IgnoreGuiInset=true, DisplayOrder=999, Parent=PG})
+local fov = new("Frame", {Size=UDim2.fromOffset(S.FOV*2, S.FOV*2), AnchorPoint=Vector2.new(0.5,0.5), Position=UDim2.new(0.5,0,0.5,0), BackgroundTransparency=1, Visible=false, Parent=sg})
+new("UICorner", {CornerRadius=UDim.new(1,0)}, fov)
+new("UIStroke", {Color=Color3.new(1,1,1), Thickness=1, Transparency=0.5}, fov)
+
+local panel = new("Frame", {Size=UDim2.new(0,520,0,220), Position=UDim2.new(0.5,-260,0.5,-110), BackgroundColor3=Color3.fromRGB(10,10,10), Active=true, Visible=true, Parent=sg})
+new("UICorner", {CornerRadius=UDim.new(0,8)}, panel)
+new("UIStroke", {Color=Color3.fromRGB(50,50,50), Thickness=1}, panel)
+
+local header = new("Frame", {Size=UDim2.new(1,0,0,30), BackgroundColor3=Color3.fromRGB(20,20,20), Active=true, Parent=panel})
+new("UICorner", {CornerRadius=UDim.new(0,8)}, header)
+new("Frame", {Size=UDim2.new(1,0,0,10), Position=UDim2.new(0,0,1,-10), BackgroundColor3=Color3.fromRGB(20,20,20), BorderSizePixel=0, Parent=header})
+new("TextLabel", {Size=UDim2.new(1,0,1,0), BackgroundTransparency=1, Text="AnhTuMup", TextColor3=Color3.new(1,1,1), TextSize=12, Font=Enum.Font.GothamBold, Parent=header})
+local closeBtn = new("TextButton", {Size=UDim2.new(0,20,0,20), Position=UDim2.new(1,-25,0.5,-10), BackgroundColor3=Color3.fromRGB(30,30,30), Text="X", TextColor3=Color3.new(1,1,1), TextSize=10, Font=Enum.Font.GothamBold, Parent=header})
+new("UICorner", {CornerRadius=UDim.new(0,4)}, closeBtn)
+
+local scroll = new("ScrollingFrame", {
+    Size=UDim2.new(1,-10,1,-40), Position=UDim2.new(0,5,0,35), 
+    BackgroundTransparency=1, BorderSizePixel=0, ScrollBarThickness=3, 
+    CanvasSize=UDim2.new(0,0,0,0), AutomaticCanvasSize=Enum.AutomaticSize.X, 
+    ScrollingDirection=Enum.ScrollingDirection.X, Parent=panel
+})
+new("UIListLayout", {Padding=UDim.new(0,10), FillDirection=Enum.FillDirection.Horizontal, SortOrder=Enum.SortOrder.LayoutOrder, Parent=scroll})
+
+-- ===== NÚT TRÒN BẬT/TẮT MENU (CHỮ "T") =====
+local toggleBtn = new("TextButton", {
+    Size=UDim2.new(0, 45, 0, 45), 
+    Position=UDim2.new(0, 20, 0, 80), 
+    BackgroundColor3=Color3.fromRGB(30, 30, 30), -- Màu tối khi đóng
+    Text="T", 
+    TextColor3=Color3.new(1,1,1), 
+    TextSize=18, 
+    Font=Enum.Font.GothamBold, 
+    AutoButtonColor=false, 
+    Parent=sg
+})
+new("UICorner", {CornerRadius=UDim.new(1, 0)}, toggleBtn)
+new("UIStroke", {Color=Color3.fromRGB(100, 100, 100), Thickness=2}, toggleBtn)
+
+-- Hàm kéo thả
+local function setupDraggable(gui, dragArea, onClick)
+    local dragging, startPos, startInput, movedDist = false, nil, nil, 0
+    dragArea.InputBegan:Connect(function(i)
+        if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
+            dragging = true; startInput = i.Position; startPos = gui.Position; movedDist = 0
+        end
+    end)
+    dragArea.InputChanged:Connect(function(i)
+        if dragging and (i.UserInputType == Enum.UserInputType.MouseMovement or i.UserInputType == Enum.UserInputType.Touch) then
+            local delta = i.Position - startInput
+            movedDist = movedDist + math.abs(delta.X) + math.abs(delta.Y)
+            gui.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+        end
+    end)
+    dragArea.InputEnded:Connect(function(i)
+        if dragging and (i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch) then
+            dragging = false
+            if movedDist < 15 and onClick then onClick() end -- Tăng lên 15 để tránh click nhầm khi vuốt
+        end
+    end)
+end
+
+-- Đổi màu nút T khi mở/đóng Menu
+local function updateToggleVisual()
+    if panel.Visible then
+        toggleBtn.BackgroundColor3 = Color3.fromRGB(120, 100, 255) -- Màu tím khi mở
+        toggleBtn.UIStroke.Color = Color3.fromRGB(200, 180, 255)
+    else
+        toggleBtn.BackgroundColor3 = Color3.fromRGB(30, 30, 30) -- Màu tối khi đóng
+        toggleBtn.UIStroke.Color = Color3.fromRGB(100, 100, 100)
+    end
+end
+
+setupDraggable(panel, header) 
+setupDraggable(toggleBtn, toggleBtn, function() 
+    panel.Visible = not panel.Visible 
+    updateToggleVisual()
+end)
+closeBtn.MouseButton1Click:Connect(function() 
+    panel.Visible = false 
+    updateToggleVisual()
+end)
+updateToggleVisual() -- Cập nhật trạng thái ban đầu
+
+local orderCount = 0
+local toggleRegistry, sliderRegistry = {}, {}
+
+local function createCategory(title)
+    orderCount = orderCount + 1
+    local cat = new("Frame", { Size=UDim2.new(0, 155, 1, -10), BackgroundColor3=Color3.fromRGB(15, 15, 15), LayoutOrder=orderCount, Parent=scroll })
+    new("UICorner", {CornerRadius=UDim.new(0,6)}, cat)
+    new("TextLabel", { Size=UDim2.new(1,0,0,18), BackgroundTransparency=1, Text=title, TextColor3=Color3.fromRGB(200,200,200), TextSize=10, Font=Enum.Font.GothamBold, Parent=cat })
+    new("UIListLayout", { Padding=UDim.new(0,4), HorizontalAlignment=Enum.HorizontalAlignment.Center, Parent=cat })
+    new("UIPadding", {PaddingTop=UDim.new(0,5), PaddingLeft=UDim.new(0,5), PaddingRight=UDim.new(0,5)}, cat)
+    return cat
+end
+
+local function makeToggle(parent, txt, varName, cb)
+    local b = new("TextButton", {Size=UDim2.new(1, 0, 0, 22), TextXAlignment=Enum.TextXAlignment.Center, TextSize=9, Font=Enum.Font.Gotham, AutoButtonColor=false, Parent=parent})
+    new("UICorner", {CornerRadius=UDim.new(0,4)}, b)
+    
+    local function updateVisual(v)
+        b.Text = txt..(v and " [ON]" or " [OFF]")
+        b.TextColor3 = v and Color3.new(1,1,1) or Color3.fromRGB(120,120,120)
+        b.BackgroundColor3 = v and Color3.fromRGB(40,40,40) or Color3.fromRGB(25,25,25)
+    end
+    
+    b.MouseButton1Click:Connect(function()
+        S[varName] = not S[varName]
+        updateVisual(S[varName])
+        if cb then cb(S[varName]) end
+    end)
+    
+    updateVisual(S[varName])
+    table.insert(toggleRegistry, {varName = varName, update = updateVisual})
+end
+
+local function makeSlider(parent, txt, varName, min, max, isInt, cb)
+    local c = new("Frame", {Size=UDim2.new(1, 0, 0, 26), BackgroundTransparency=1, Parent=parent})
+    local lbl = new("TextLabel", {Size=UDim2.new(1,0,0,12), BackgroundTransparency=1, TextColor3=Color3.fromRGB(150,150,150), TextSize=9, Font=Enum.Font.Gotham, TextXAlignment=Enum.TextXAlignment.Center, Parent=c})
+    local bar = new("Frame", {Size=UDim2.new(1,0,0,5), Position=UDim2.new(0,0,0,16), BackgroundColor3=Color3.fromRGB(40,40,40), Parent=c})
+    new("UICorner", {CornerRadius=UDim.new(1,0)}, bar)
+    local fill = new("Frame", {BackgroundColor3=Color3.new(1,1,1), Parent=bar})
+    new("UICorner", {CornerRadius=UDim.new(1,0)}, fill)
+    
+    local function updateVisual(v)
+        lbl.Text = txt..": "..v
+        fill.Size = UDim2.new((v-min)/(max-min), 0, 1, 0)
+    end
+    
+    local drag = false
+    bar.InputBegan:Connect(function(i) if i.UserInputType == Enum.UserInputType.Touch or i.UserInputType == Enum.UserInputType.MouseButton1 then drag = true end end)
+    UIS.InputChanged:Connect(function(i) 
+        if drag and (i.UserInputType == Enum.UserInputType.Touch or i.UserInputType == Enum.UserInputType.MouseMovement) then
+            local p = math.clamp((i.Position.X - bar.AbsolutePosition.X) / bar.AbsoluteSize.X, 0, 1)
+            local v = min + (max - min) * p
+            if isInt then v = math.floor(v + 0.5) end
+            S[varName] = v
+            updateVisual(v)
+            if cb then cb(v) end
+        end
+    end)
+    UIS.InputEnded:Connect(function(i) if i.UserInputType == Enum.UserInputType.Touch or i.UserInputType == Enum.UserInputType.MouseButton1 then drag = false end end)
+    
+    updateVisual(S[varName])
+    table.insert(sliderRegistry, {varName = varName, update = updateVisual})
+end
+
+-- ===== SẮP XẾP CÁC CỘT =====
+local catAim = createCategory("AIMBOT")
+makeToggle(catAim, "Bật Aim", "Enabled")
+makeToggle(catAim, "Xoay Nhân Vật", "ModeCharacter")
+makeToggle(catAim, "Bỏ qua đồng đội", "TeamCheck")
+makeSlider(catAim, "Kích thước FOV", "FOV", 50, 800, true)
+makeSlider(catAim, "Độ mượt", "Smooth", 0.02, 1, false)
+
+local catESP = createCategory("ESP")
+makeToggle(catESP, "Bật ESP", "ESP", function() updateAllESP() end)
+makeToggle(catESP, "Hiện Tên", "ShowName", function() updateAllESP() end)
+makeToggle(catESP, "Hiện Máu", "ShowHealth", function() updateAllESP() end)
+makeSlider(catESP, "Tầm nhìn ESP", "ESPDistance", 100, 5000, true, function() updateAllESP() end)
+
+local catChar = createCategory("NHÂN VẬT")
+makeToggle(catChar, "Bật Tốc độ", "SpeedEnabled")
+makeSlider(catChar, "Tốc độ chạy", "Speed", 16, 150, true)
+makeToggle(catChar, "Bật Lực Nhảy", "JumpEnabled")
+makeSlider(catChar, "Lực nhảy", "Jump", 50, 250, true)
+makeSlider(catChar, "Tầm nhìn Cam", "CameraFOV", 70, 120, true, function(v) 
+    if workspace.CurrentCamera then workspace.CurrentCamera.FieldOfView = v end
+end)
+
+local clearBtn = new("TextButton", {Size=UDim2.new(1, 0, 0, 30), BackgroundColor3=Color3.fromRGB(150, 30, 30), Text="XÓA TẤT CẢ", TextColor3=Color3.new(1,1,1), TextSize=10, Font=Enum.Font.GothamBold, Parent=catChar})
+new("UICorner", {CornerRadius=UDim.new(0,4)}, clearBtn)
+
+clearBtn.MouseButton1Click:Connect(function()
+    isDestroyed = true
+    local char = LP.Character
+    if char then
+        local hum = char:FindFirstChildOfClass("Humanoid")
+        if hum then
+            hum.WalkSpeed = 16
+            if hum.UseJumpPower then hum.JumpPower = 50 else hum.JumpHeight = 50 end
+        end
+    end
+    if workspace.CurrentCamera then workspace.CurrentCamera.FieldOfView = 70 end
+    for c, _ in pairs(espData) do removeESP(c) end
+    pcall(function() RunService:UnbindFromRenderStep("Aim") end)
+    sg:Destroy()
+    print("❌ Đã XÓA TOÀN BỘ Menu và tắt mọi chức năng!")
+end)
+
+-- VÒNG LẶP CHÍNH
+RunService:BindToRenderStep("Aim", Enum.RenderPriority.Camera.Value + 1, function()
+    if isDestroyed then return end
+    local cam = workspace.CurrentCamera
+    if not cam then return end
+    
+    if cam.FieldOfView ~= S.CameraFOV then cam.FieldOfView = S.CameraFOV end
+
+    fov.Visible = S.Enabled and S.ShowFOV
+    if fov.Visible then
+        fov.Position = UDim2.fromOffset(cam.ViewportSize.X / 2, cam.ViewportSize.Y / 2)
+        fov.Size = UDim2.fromOffset(S.FOV * 2, S.FOV * 2)
+    end
+    
+    if not S.Enabled then return end
+    local target = getTarget()
+    if target then
+        if not S.ModeCharacter then
+            cam.CFrame = cam.CFrame:Lerp(CFrame.lookAt(cam.CFrame.Position, target.Position), S.Smooth)
+        else
+            local char = LP.Character
+            if char and char.PrimaryPart then
+                char.PrimaryPart.CFrame = char.PrimaryPart.CFrame:Lerp(CFrame.lookAt(char.PrimaryPart.Position, Vector3.new(target.Position.X, char.PrimaryPart.Position.Y, target.Position.Z)), S.Smooth)
             end
-        end)
+        end
     end
 end)
-
-UserInputService.InputEnded:Connect(function(input)
-    if input.UserInputType ~= Enum.UserInputType.MouseButton1
-    and input.UserInputType ~= Enum.UserInputType.Touch then return end
-    if not pressing then return end
-
-    pressing = false
-    if moveConn then moveConn:Disconnect(); moveConn = nil end
-
-    -- Không kéo = click → toggle
-    if not dragging then
-        setEnabled(not isEnabled)
-        refreshVisual()
-    end
-    dragging = false
-end)
-
--- Hover
-btn.MouseEnter:Connect(function() stroke.Transparency = 0 end)
-btn.MouseLeave:Connect(function() stroke.Transparency = 0.3 end)
-
--- Phím tắt K
-UserInputService.InputBegan:Connect(function(input, gp)
-    if gp then return end
-    if input.KeyCode == Enum.KeyCode.K then
-        setEnabled(not isEnabled)
-        refreshVisual()
-    end
-end)
-
--- Khởi tạo
-scanPrompts()
-refreshVisual()
+print("✅ Đã tải Menu AnhTuMup (Nút T - Bản Hoàn Thiện)!")
